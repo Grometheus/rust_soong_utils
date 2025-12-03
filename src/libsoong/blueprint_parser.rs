@@ -1,5 +1,15 @@
 use crate::libsoong::errors::*;
-use std::{error::Error, iter::Peekable};
+use std::{
+    collections::HashMap,
+    error::Error,
+    iter::{self, Peekable},
+    slice::Iter,
+    vec::IntoIter,
+};
+
+//=============================
+//    Tokeniser section
+//=============================
 
 struct StrStr<'a> {
     // curr must be contained within origin
@@ -96,14 +106,18 @@ impl<'a> StrStr<'a> {
     }
 }
 
+#[derive(Debug)]
 enum TokenValue<'a> {
-    EOF,
-
     Whitespace,
     SingleLineComment(&'a str),
     MultilineComment(&'a str),
 
-    Operator(char),
+    SubOp,
+
+    AddOp,
+    AddEqOp,
+
+    EqOp,
 
     OpenCurlyBracket,
     CloseCurlyBracket,
@@ -120,6 +134,7 @@ enum TokenValue<'a> {
     Identifier(&'a str),
 }
 
+#[derive(Debug)]
 struct Token<'a> {
     value: TokenValue<'a>,
 
@@ -174,7 +189,23 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                 TokenValue::Comma
             }
 
-            Some(c) if matches!(c, '+') => TokenValue::Operator(c),
+            Some('+') => {
+                ss.increment();
+                if matches!(ss.curr.chars().next(), Some('=')) {
+                    ss.increment();
+                    TokenValue::AddEqOp
+                } else {
+                    TokenValue::AddOp
+                }
+            }
+            Some('-') => {
+                ss.increment();
+                TokenValue::SubOp
+            }
+            Some('=') => {
+                ss.increment();
+                TokenValue::EqOp
+            }
 
             Some(c) if c.is_ascii_whitespace() => {
                 let start_index = ss.index();
@@ -223,7 +254,6 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
             }
 
             Some('/') => {
-                // Safe to ignore
                 ss.increment();
 
                 match ss.increment() {
@@ -273,20 +303,424 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
 
         tokens.push(Token { value, line, col });
     }
-    tokens.push(Token {
-        value: TokenValue::EOF,
-        line: line,
-        col: (ss.index() - line_start) as u64,
-    });
     Ok(tokens)
 }
 
+#[derive(Debug)]
+pub enum BlueprintValue {
+    Integer(i64),
+    UnknownIdentifer(String),
+
+    // used for unknown identifiers
+    Negative(Box<BlueprintValue>),
+    String(String),
+
+    Map(Vec<(String, BlueprintValue)>),
+    List(Vec<BlueprintValue>),
+
+    Add(Box<BlueprintValue>, Box<BlueprintValue>),
+}
+
+type TokenIter<'a, 'b> = &'a mut Peekable<IntoIter<Token<'b>>>;
+type TokenIterVal<'a> = Peekable<IntoIter<Token<'a>>>;
+
+fn consume_white(toks: TokenIter) {
+    while let Some(Token {
+        value:
+            TokenValue::Whitespace | TokenValue::SingleLineComment(_) | TokenValue::MultilineComment(_),
+        line: _,
+        col: _,
+    }) = toks.peek()
+    {
+        let _ = toks.next();
+    }
+}
+
+macro_rules! unexpected_err {
+    ($msg : expr) => {
+        Err(ParseError::from(ParseErrorType::UnExpectedCharactor, $msg))?
+    };
+}
+macro_rules! unexpected_eof_err {
+    () => {
+        unexpected_err!("Unexpected EOF")
+    };
+}
+
+macro_rules! expected_tok_err {
+    ($file_ctx:expr, $msg:expr, $line:expr, $col:expr) => {
+        Err(ParseError::from_ctx(
+            ParseErrorType::ExpectedCharactor,
+            $msg,
+            $file_ctx.to_string(),
+            $line,
+            $col,
+        ))?
+    };
+}
+
+macro_rules! expect_value {
+    ($toks:expr,$file_ctx:expr, $token_value:pat, $msg:expr, $usage:expr) => {{
+        let tok = $toks.next();
+        match tok {
+            Some(Token {
+                value: $token_value,
+                line: _,
+                col: _,
+            }) => $usage,
+            Some(Token {
+                value: _,
+                line,
+                col,
+            }) => expected_tok_err!($file_ctx, $msg, line, col),
+            None => unexpected_eof_err!(),
+        }
+    }};
+}
+
+fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<Vec<(String, BlueprintValue)>, ParseError> {
+    expect_value!(
+        toks,
+        file_ctx,
+        TokenValue::OpenCurlyBracket,
+        "Expected: '{'",
+        ()
+    );
+
+    let mut ret = Vec::new();
+    loop {
+        consume_white(toks);
+
+        // Edge case: Trailing comma
+        if matches!(
+            toks.peek(),
+            Some(Token {
+                value: TokenValue::CloseCurlyBracket,
+                line,
+                col
+            })
+        ) {
+            break;
+        }
+
+        let id = expect_value!(toks, file_ctx, TokenValue::Identifier(id), "Identifier", id);
+        consume_white(toks);
+        expect_value!(toks, file_ctx, TokenValue::Colon, "':'", ());
+        consume_white(toks);
+        let val = parse_value(toks, file_ctx)?;
+
+        ret.push((id.to_string(), val));
+
+        consume_white(toks);
+
+        match toks.peek() {
+            Some(Token {
+                value: TokenValue::Comma,
+                line,
+                col,
+            }) => {
+                toks.next();
+                continue;
+            }
+            Some(Token {
+                value: TokenValue::CloseCurlyBracket,
+                line,
+                col,
+            }) => {
+                break;
+            }
+
+            Some(Token {
+                value: _,
+                line,
+                col,
+            }) => expected_tok_err!(file_ctx, "Expected: ',' or '}'", *line, *col),
+            None => unexpected_eof_err!(),
+        }
+    }
+
+    consume_white(toks);
+    expect_value!(
+        toks,
+        file_ctx,
+        TokenValue::CloseCurlyBracket,
+        "Expected: '}'",
+        ()
+    );
+
+    Ok(ret)
+}
+
+fn parse_list(toks: TokenIter, file_ctx: &str) -> Result<Vec<BlueprintValue>, ParseError> {
+    expect_value!(
+        toks,
+        file_ctx,
+        TokenValue::OpenSquareBracket,
+        "Expected: '['",
+        ()
+    );
+    let mut ret = Vec::new();
+    loop {
+        consume_white(toks);
+        // Edge case: Trailing comma
+        if matches!(
+            toks.peek(),
+            Some(Token {
+                value: TokenValue::CloseSquareBracket,
+                line,
+                col
+            })
+        ) {
+            break;
+        }
+
+        ret.push(parse_value(toks, file_ctx)?);
+
+        consume_white(toks);
+
+        match toks.peek() {
+            Some(Token {
+                value: TokenValue::Comma,
+                line,
+                col,
+            }) => {
+                toks.next();
+                continue;
+            }
+            Some(Token {
+                value: TokenValue::CloseSquareBracket,
+                line,
+                col,
+            }) => {
+                break;
+            }
+
+            Some(Token {
+                value: _,
+                line,
+                col,
+            }) => expected_tok_err!(file_ctx, "Expected: ',' or ']'", *line, *col),
+            None => unexpected_eof_err!(),
+        }
+    }
+
+    expect_value!(
+        toks,
+        file_ctx,
+        TokenValue::CloseSquareBracket,
+        "Expected: ']'",
+        ()
+    );
+    Ok(ret)
+}
+
+fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseError> {
+    if let None = toks.peek() {
+        panic!("Violation: Must not be at eof")
+    }
+
+    // Do one first attempt at parsing
+    let tok = toks.peek().unwrap();
+    let first = match tok.value {
+        TokenValue::Whitespace
+        | TokenValue::SingleLineComment(_)
+        | TokenValue::MultilineComment(_) => panic!("Violation: Must start with non-ws"),
+
+        TokenValue::CloseSquareBracket | TokenValue::CloseCurlyBracket => {
+            unexpected_err!("Stray bracket")
+        }
+
+        TokenValue::Colon => unexpected_err!("Stray colon"),
+        TokenValue::Comma => unexpected_err!("Stray comma"),
+        TokenValue::EqOp => unexpected_err!("Stray equals sign"),
+        TokenValue::AddEqOp => unexpected_err!("Stray add-equals sign"),
+
+        TokenValue::Number(num_str) => {
+            if let Ok(int) = num_str.parse() {
+                // Safe to ignore
+                let _ = toks.next();
+
+                BlueprintValue::Integer(int)
+            } else {
+                Err(ParseError::from_ctx(
+                    ParseErrorType::InvalidInteger,
+                    "Not a valid integer",
+                    file_ctx.to_string(),
+                    tok.line,
+                    tok.col,
+                ))?
+            }
+        }
+
+        TokenValue::Identifier(id) => {
+            let _ = toks.next();
+            BlueprintValue::UnknownIdentifer(id.to_string())
+        }
+        TokenValue::OpenCurlyBracket => BlueprintValue::Map(parse_map(toks, file_ctx)?),
+        TokenValue::OpenSquareBracket => BlueprintValue::List(parse_list(toks, file_ctx)?),
+
+        TokenValue::String(str) => {
+            let _ = toks.next();
+
+            BlueprintValue::String(str.to_string())
+        }
+
+        TokenValue::AddOp => Err(ParseError::from_ctx(
+            ParseErrorType::UnExpectedCharactor,
+            "A plus sign must follow a value",
+            file_ctx.to_string(),
+            tok.line,
+            tok.col,
+        ))?,
+        TokenValue::SubOp => {
+            let operator_line = tok.line;
+            let operator_col = tok.col;
+
+            // Safe to ignore
+            let _ = toks.next();
+
+            // Technically allowed by soong
+            consume_white(toks);
+
+            let (next_line, next_col) = match toks.peek() {
+                Some(tok) => (tok.line, tok.col),
+                None => expected_tok_err!(
+                    file_ctx,
+                    "Minus sign must be followed with something",
+                    operator_line,
+                    operator_col
+                ),
+            };
+
+            let val = parse_value(toks, file_ctx)?;
+            match val {
+                BlueprintValue::Integer(i) => BlueprintValue::Integer(-i),
+                BlueprintValue::UnknownIdentifer(_) => BlueprintValue::Negative(Box::from(val)),
+                _ => expected_tok_err!(
+                    file_ctx,
+                    "Minus sign must be followed by an integer",
+                    next_col,
+                    next_col
+                ),
+            }
+        }
+
+    };
+
+    // Afterwards see if there is a plus sign
+    consume_white(toks);
+    Ok(match toks.peek() {
+        Some(Token {
+            value: TokenValue::AddOp,
+            line,
+            col,
+        }) => {
+            // Safe due to peek check
+            let _ = toks.next();
+            consume_white(toks);
+
+            BlueprintValue::Add(Box::from(first), Box::from(parse_value(toks, file_ctx)?))
+        }
+        _ => first,
+    })
+}
+
+//=============================
+//    AST section
+//=============================
+
+#[derive(Debug)]
+pub enum ASTLine {
+    VarSet(String, BlueprintValue),
+
+    VarAddSet(String, BlueprintValue),
+
+    Rule(String, Vec<(String, BlueprintValue)>),
+}
+fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError> {
+    let id = expect_value!(
+        toks,
+        file_ctx,
+        TokenValue::Identifier(id),
+        "Expected: Identifier",
+        id
+    );
+
+    consume_white(toks);
+
+    Ok(match toks.peek() {
+        None => unexpected_eof_err!(),
+        Some(Token {
+            value: TokenValue::EqOp,
+            line,
+            col,
+        }) => {
+            toks.next();
+            consume_white(toks);
+
+            ASTLine::VarSet(id.to_string(), parse_value(toks, file_ctx)?)
+        },
+        Some(Token {
+            value: TokenValue::AddEqOp,
+            line,
+            col,
+        }) => {
+            toks.next();
+            consume_white(toks);
+
+            ASTLine::VarAddSet(id.to_string(), parse_value(toks, file_ctx)?)
+        },
+        Some(Token {
+            value: TokenValue::OpenCurlyBracket,
+            line,
+            col,
+        }) => {
+            consume_white(toks);
 
 
+            ASTLine::Rule(id.to_string(), match parse_value(toks, file_ctx)?{
+                BlueprintValue::Map(map) => map,
+                _ => unreachable!()
+            })
+        },
+        Some(Token {
+            value: _,
+            line,
+            col,
+        }) => expected_tok_err!(
+            file_ctx,
+            "An = or a '{' must follow an identifier",
+            *line,
+            *col
+        ),
 
+        _ => todo!(),
+    })
 
+}
 
+pub struct ASTGenerator<'a> {
+    token_iter: TokenIterVal<'a>,
+    file: &'a str,
+}
 
+impl<'a> ASTGenerator<'a> {
+    pub fn from(file: &'a str) -> Result<ASTGenerator<'a>, ParseError> {
+        Ok(ASTGenerator {
+            token_iter: tokenize(file)?.into_iter().peekable(),
+            file,
+        })
+    }
+}
 
+impl<'a> Iterator for ASTGenerator<'a> {
+    type Item = Result<ASTLine, ParseError>;
 
+    fn next(&mut self) -> Option<Self::Item> {
+        consume_white(&mut self.token_iter);
 
+        let _ = self.token_iter.peek()?;
+
+        Some(parse_ast_line(&mut self.token_iter, &self.file))
+    }
+}

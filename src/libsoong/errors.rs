@@ -4,6 +4,7 @@ use std::{error::Error, fmt::Debug};
 pub enum ParseErrorType {
     ExpectedCharactor,
     UnExpectedCharactor,
+    InvalidInteger,
 }
 
 pub struct ParseCtx {
