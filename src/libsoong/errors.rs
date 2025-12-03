@@ -25,13 +25,13 @@ impl Debug for ParseCtx {
 #[derive(Debug)]
 pub struct ParseError {
     error_type: ParseErrorType,
-    short_desc: &'static str,
+    short_desc: String,
 
     context: Option<ParseCtx>,
 }
 
 impl ParseError {
-    pub fn from(error_type: ParseErrorType, short_desc: &'static str) -> ParseError {
+    pub fn from(error_type: ParseErrorType, short_desc: String) -> ParseError {
         ParseError {
             error_type: error_type,
             short_desc: short_desc,
@@ -49,7 +49,7 @@ impl ParseError {
 
     pub fn from_ctx(
         error_type: ParseErrorType,
-        short_desc: &'static str,
+        short_desc: String,
         file: String,
         line: u64,
         col: u64,

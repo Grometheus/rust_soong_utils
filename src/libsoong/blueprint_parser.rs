@@ -246,7 +246,7 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                         Some(x) => x,
                         None => Err(ParseError::from_ctx(
                             ParseErrorType::ExpectedCharacter,
-                            "Could not find end to string",
+                            "Could not find end to string".to_string(),
                             ss.origin.to_string(),
                             pre_line,
                             pre_col,
@@ -268,7 +268,7 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                             Some(x) => x,
                             None => Err(ParseError::from_ctx(
                                 ParseErrorType::ExpectedCharacter,
-                                "Could not find end to comment",
+                                "Could not find end to comment".to_string(),
                                 ss.origin.to_string(),
                                 pre_line,
                                 pre_col,
@@ -278,7 +278,7 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
 
                     None | Some(_) => Err(ParseError::from_ctx(
                         ParseErrorType::ExpectedCharacter,
-                        "Unexpeced character after backslash",
+                        "Unexpeced character after backslash".to_string(),
                         ss.origin.to_string(),
                         pre_line,
                         pre_col,
@@ -290,7 +290,7 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                 dbg!(ss.curr);
                 Err(ParseError::from_ctx(
                     ParseErrorType::UnExpectedCharacter,
-                    format!("Unknown character during tokenization: '{}'", c).leak(),
+                    format!("Unknown character during tokenization: '{}'", c),
                     ss.origin.to_string(),
                     pre_line,
                     pre_col,
@@ -344,7 +344,7 @@ macro_rules! unexpected_err {
 }
 macro_rules! unexpected_eof_err {
     () => {
-        unexpected_err!("Unexpected EOF")
+        unexpected_err!("Unexpected EOF".to_string())
     };
 }
 
@@ -384,7 +384,7 @@ fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<Vec<(String, BlueprintVa
         toks,
         file_ctx,
         TokenValue::OpenCurlyBracket,
-        "Expected: '{'",
+        "Expected: '{'".to_string(),
         ()
     );
 
@@ -404,9 +404,9 @@ fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<Vec<(String, BlueprintVa
             break;
         }
 
-        let id = expect_value!(toks, file_ctx, TokenValue::Identifier(id), "Identifier", id);
+        let id = expect_value!(toks, file_ctx, TokenValue::Identifier(id), "Identifier".to_string(), id);
         consume_white(toks);
-        expect_value!(toks, file_ctx, TokenValue::Colon, "':'", ());
+        expect_value!(toks, file_ctx, TokenValue::Colon, "':'".to_string(), ());
         consume_white(toks);
         let val = parse_value(toks, file_ctx)?;
 
@@ -435,7 +435,7 @@ fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<Vec<(String, BlueprintVa
                 value: _,
                 line,
                 col,
-            }) => expected_tok_err!(file_ctx, "Expected: ',' or '}'", *line, *col),
+            }) => expected_tok_err!(file_ctx, "Expected: ',' or '}'".to_string(), *line, *col),
             None => unexpected_eof_err!(),
         }
     }
@@ -445,7 +445,7 @@ fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<Vec<(String, BlueprintVa
         toks,
         file_ctx,
         TokenValue::CloseCurlyBracket,
-        "Expected: '}'",
+        "Expected: '}'".to_string(),
         ()
     );
 
@@ -457,7 +457,7 @@ fn parse_list(toks: TokenIter, file_ctx: &str) -> Result<Vec<BlueprintValue>, Pa
         toks,
         file_ctx,
         TokenValue::OpenSquareBracket,
-        "Expected: '['",
+        "Expected: '['".to_lowercase(),
         ()
     );
     let mut ret = Vec::new();
@@ -497,10 +497,10 @@ fn parse_list(toks: TokenIter, file_ctx: &str) -> Result<Vec<BlueprintValue>, Pa
             }
 
             Some(Token {
-                value: _,
+                value: tok,
                 line,
                 col,
-            }) => expected_tok_err!(file_ctx, "Expected: ',' or ']'", *line, *col),
+            }) => expected_tok_err!(file_ctx, format!("Expected: ',' or ']', got {:?}", *tok), *line, *col),
             None => unexpected_eof_err!(),
         }
     }
@@ -509,7 +509,7 @@ fn parse_list(toks: TokenIter, file_ctx: &str) -> Result<Vec<BlueprintValue>, Pa
         toks,
         file_ctx,
         TokenValue::CloseSquareBracket,
-        "Expected: ']'",
+        "Expected: ']'".to_string(),
         ()
     );
     Ok(ret)
@@ -528,13 +528,13 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
         | TokenValue::MultilineComment(_) => panic!("Violation: Must start with non-ws"),
 
         TokenValue::CloseSquareBracket | TokenValue::CloseCurlyBracket => {
-            unexpected_err!("Stray bracket")
+            unexpected_err!("Stray bracket".to_string())
         }
 
-        TokenValue::Colon => unexpected_err!("Stray colon"),
-        TokenValue::Comma => unexpected_err!("Stray comma"),
-        TokenValue::EqOp => unexpected_err!("Stray equals sign"),
-        TokenValue::AddEqOp => unexpected_err!("Stray add-equals sign"),
+        TokenValue::Colon => unexpected_err!("Stray colon".to_string()),
+        TokenValue::Comma => unexpected_err!("Stray comma".to_string()),
+        TokenValue::EqOp => unexpected_err!("Stray equals sign".to_string()),
+        TokenValue::AddEqOp => unexpected_err!("Stray add-equals sign".to_string()),
 
         TokenValue::Number(num_str) => {
             if let Ok(int) = num_str.parse() {
@@ -545,7 +545,7 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
             } else {
                 Err(ParseError::from_ctx(
                     ParseErrorType::InvalidInteger,
-                    "Not a valid integer",
+                    "Not a valid integer".to_string(),
                     file_ctx.to_string(),
                     tok.line,
                     tok.col,
@@ -568,7 +568,7 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
 
         TokenValue::AddOp => Err(ParseError::from_ctx(
             ParseErrorType::UnExpectedCharacter,
-            "A plus sign must follow a value",
+            "A plus sign must follow a value".to_string(),
             file_ctx.to_string(),
             tok.line,
             tok.col,
@@ -587,7 +587,7 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
                 Some(tok) => (tok.line, tok.col),
                 None => expected_tok_err!(
                     file_ctx,
-                    "Minus sign must be followed with something",
+                    "Minus sign must be followed with something".to_string(),
                     operator_line,
                     operator_col
                 ),
@@ -599,7 +599,7 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
                 BlueprintValue::UnknownIdentifer(_) => BlueprintValue::Negative(Box::from(val)),
                 _ => expected_tok_err!(
                     file_ctx,
-                    "Minus sign must be followed by an integer",
+                    "Minus sign must be followed by an integer".to_string(),
                     next_line,
                     next_col
                 ),
@@ -642,7 +642,7 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
         toks,
         file_ctx,
         TokenValue::Identifier(id),
-        "Expected: Identifier",
+        "Expected: Identifier".to_string(),
         id
     );
 
@@ -691,7 +691,7 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
             col,
         }) => expected_tok_err!(
             file_ctx,
-            "An = or a '{' must follow an identifier",
+            "An = or a '{' must follow an identifier".to_string(),
             *line,
             *col
         ),
