@@ -1,8 +1,11 @@
+// TODO: We must figure out how to properly figure out lines!!!
+
 use crate::libsoong::errors::*;
 use std::{
     collections::HashMap,
     error::Error,
     iter::{self, Peekable},
+    panic,
     slice::Iter,
     vec::IntoIter,
 };
@@ -15,6 +18,9 @@ struct StrStr<'a> {
     // curr must be contained within origin
     curr: &'a str,
     origin: &'a str,
+
+    line: u64,
+    col: u64,
 }
 
 impl<'a> StrStr<'a> {
@@ -22,6 +28,9 @@ impl<'a> StrStr<'a> {
         StrStr {
             curr: val,
             origin: val,
+
+            line: 1,
+            col: 1,
         }
     }
 
@@ -37,6 +46,14 @@ impl<'a> StrStr<'a> {
         let i = self.curr.find(|c| !predicate(c)).unwrap_or(self.curr.len());
 
         let r = &self.curr[0..i];
+
+        for c in r.chars() {
+            if c != '\n' {
+                continue;
+            }
+            self.line += 1;
+            self.col = 1;
+        }
         self.curr = &self.curr[i..];
         r
     }
@@ -50,7 +67,7 @@ impl<'a> StrStr<'a> {
     ///
     /// # Returns
     /// `Some(&str)` of consumed text (adjusted by offset), or `None` if initial window fails.
-    pub fn consume_while_windowed<const N: usize, F>(
+    fn consume_while_windowed<const N: usize, F>(
         &mut self,
         mut predicate: F,
 
@@ -71,24 +88,32 @@ impl<'a> StrStr<'a> {
             }
         }
 
-        if !predicate(&window) {
-            return None;
-        }
-
-        let mut i: usize = N;
+        let mut i: usize = 0;
 
         for c in itr {
-            window.rotate_left(1);
-            window[N - 1] = c;
-
-            i += 1;
             if !predicate(&window) {
                 break;
             }
+
+            i += 1;
+            window.rotate_left(1);
+            window[N - 1] = c;
         }
 
-        let r = &self.curr[..i.saturating_add_signed(output_offset)];
-        self.curr = &self.curr[i.saturating_add_signed(advance_by)..];
+        let output_end_idx = i.saturating_add_signed(output_offset);
+        let input_end_idx = i.saturating_add_signed(advance_by);
+
+        for c in self.curr[..input_end_idx].chars() {
+            if c != '\n' {
+                continue;
+            }
+
+            self.line += 1;
+            self.col = 1;
+        }
+
+        let r = &self.curr[..output_end_idx];
+        self.curr = &self.curr[input_end_idx..];
 
         Some(r)
     }
@@ -99,6 +124,10 @@ impl<'a> StrStr<'a> {
 
     fn increment(&mut self) -> Option<char> {
         let x = self.curr.chars().next()?;
+        if x == '\n' {
+            self.line += 1;
+            self.col = 1;
+        }
 
         self.curr = &self.curr[x.len_utf8()..];
 
@@ -147,21 +176,18 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
     let mut tokens: Vec<Token> = Vec::with_capacity(input.len() / 4);
 
     let mut ss = StrStr::new(input);
-    let mut line = 0;
-    let mut line_start = 0;
 
     while !ss.curr.is_empty() {
-        let col = (ss.index() - line_start) as u64;
-
+        let pre_line = ss.line;
+        let pre_col = ss.col;
         let value = match ss.curr.chars().next() {
             None => {
                 break;
             }
             Some('0'..='9') => TokenValue::Number(ss.consume_while(|c| matches!(c, '0'..='9'))),
-            Some('a'..='z' | 'A'..='Z') => {
-                TokenValue::Identifier(ss.consume_while(|c| c.is_ascii_alphanumeric()))
+            Some('a'..='z' | 'A'..='Z' | '_') => {
+                TokenValue::Identifier(ss.consume_while(|c| c == '_' || c.is_ascii_alphanumeric()))
             }
-
             Some('{') => {
                 ss.increment();
                 TokenValue::OpenCurlyBracket
@@ -170,7 +196,6 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                 ss.increment();
                 TokenValue::CloseCurlyBracket
             }
-
             Some('[') => {
                 ss.increment();
                 TokenValue::OpenSquareBracket
@@ -179,7 +204,6 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                 ss.increment();
                 TokenValue::CloseSquareBracket
             }
-
             Some(':') => {
                 ss.increment();
                 TokenValue::Colon
@@ -188,7 +212,6 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                 ss.increment();
                 TokenValue::Comma
             }
-
             Some('+') => {
                 ss.increment();
                 if matches!(ss.curr.chars().next(), Some('=')) {
@@ -206,53 +229,32 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                 ss.increment();
                 TokenValue::EqOp
             }
-
             Some(c) if c.is_ascii_whitespace() => {
-                let start_index = ss.index();
-                for (i, c) in ss.curr.char_indices() {
-                    if !(c.is_ascii_whitespace()) {
-                        ss.curr = &ss.curr[i..];
-                        break;
-                    }
-                    if c == '\n' {
-                        line += 1;
-                        line_start = start_index + i;
-                    }
-                }
-                // Check for an eof, aka where all ws was found whitespace
-                if let Some(c) = ss.curr.chars().next() {
-                    if c.is_ascii_whitespace() {
-                        ss.curr = &ss.curr[ss.curr.len()..];
-                    }
-                }
+                ss.skip_ws();
 
                 TokenValue::Whitespace
             }
-
             Some('"') => {
                 ss.increment();
                 let r = TokenValue::String(
                     ss.consume_while_windowed(
-                        |win: &[char; 2]| !(matches!(win, [_, '\"'] if win[0] != '\\')),
-                        -1,
-                        0,
+                        |win: &[char; 2]| win[1] != '"',
+                        1,
+                        2,
                     )
                     .unwrap_or(""),
                 );
-
                 if (ss.curr.is_empty()) {
                     Err(ParseError::from_ctx(
                         ParseErrorType::ExpectedCharactor,
                         "Could not find end to string",
                         ss.origin.to_string(),
-                        line,
-                        col,
+                        pre_line,
+                        pre_col,
                     ))?
                 }
-
                 r
             }
-
             Some('/') => {
                 ss.increment();
 
@@ -262,8 +264,8 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                         let r = TokenValue::MultilineComment(
                             ss.consume_while_windowed(
                                 |win: &[char; 2]| !matches!(win, ['*', '/']),
-                                -2,
                                 0,
+                                2,
                             )
                             .unwrap_or(""),
                         );
@@ -272,12 +274,13 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                                 ParseErrorType::ExpectedCharactor,
                                 "Could not find end to comment",
                                 ss.origin.to_string(),
-                                line,
-                                col,
+                                pre_line,
+                                pre_col,
                             ))?
                         }
 
-                        ss.curr = &ss.curr[2..];
+                        ss.increment();
+                        ss.increment();
 
                         r
                     }
@@ -286,22 +289,29 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                         ParseErrorType::ExpectedCharactor,
                         "Unexpeced charactor after backslash",
                         ss.origin.to_string(),
-                        line,
-                        col,
+                        pre_line,
+                        pre_col,
                     ))?,
                 }
             }
 
-            Some(c) => Err(ParseError::from_ctx(
-                ParseErrorType::UnExpectedCharactor,
-                "Unknown charactor",
-                ss.origin.to_string(),
-                line,
-                col,
-            ))?,
+            Some(c) => {
+                dbg!(ss.curr);
+                Err(ParseError::from_ctx(
+                    ParseErrorType::UnExpectedCharactor,
+                    format!("Unknown charactor during tokenization: '{}'", c).leak(),
+                    ss.origin.to_string(),
+                    pre_line,
+                    pre_col,
+                ))?
+            }
         };
 
-        tokens.push(Token { value, line, col });
+        tokens.push(Token {
+            value,
+            line: pre_line,
+            col: pre_col,
+        });
     }
     Ok(tokens)
 }
@@ -604,7 +614,6 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
                 ),
             }
         }
-
     };
 
     // Afterwards see if there is a plus sign
@@ -659,7 +668,7 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
             consume_white(toks);
 
             ASTLine::VarSet(id.to_string(), parse_value(toks, file_ctx)?)
-        },
+        }
         Some(Token {
             value: TokenValue::AddEqOp,
             line,
@@ -669,7 +678,7 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
             consume_white(toks);
 
             ASTLine::VarAddSet(id.to_string(), parse_value(toks, file_ctx)?)
-        },
+        }
         Some(Token {
             value: TokenValue::OpenCurlyBracket,
             line,
@@ -677,12 +686,14 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
         }) => {
             consume_white(toks);
 
-
-            ASTLine::Rule(id.to_string(), match parse_value(toks, file_ctx)?{
-                BlueprintValue::Map(map) => map,
-                _ => unreachable!()
-            })
-        },
+            ASTLine::Rule(
+                id.to_string(),
+                match parse_value(toks, file_ctx)? {
+                    BlueprintValue::Map(map) => map,
+                    _ => unreachable!(),
+                },
+            )
+        }
         Some(Token {
             value: _,
             line,
@@ -696,7 +707,6 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
 
         _ => todo!(),
     })
-
 }
 
 pub struct ASTGenerator<'a> {

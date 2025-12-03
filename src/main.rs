@@ -1,3 +1,5 @@
+use std::{fs::File, io::Read};
+
 use crate::libsoong::blueprint_parser::ASTGenerator;
 
 mod libsoong;
@@ -5,7 +7,11 @@ mod libsoong;
 
 
 fn main(){
-    let mut ast_gen = ASTGenerator::from("").unwrap();
+    let mut f = File::open("tests/NonTest.bp").unwrap();
+    let mut str = String::new();
+    f.read_to_string(&mut str).unwrap();
+
+    let mut ast_gen = ASTGenerator::from(&str).unwrap();
     for n in ast_gen{
         dbg!(n.unwrap());
     }

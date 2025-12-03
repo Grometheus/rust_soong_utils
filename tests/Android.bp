@@ -64,7 +64,7 @@ cc_test_host {
         "-l" + "z",
     ],
     shared_libs: [],
-    cflags = [
+    cflags : [
         "-Wall",
         "-fstrict-aliasing",
     ],
