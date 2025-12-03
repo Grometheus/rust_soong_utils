@@ -7,11 +7,11 @@ mod libsoong;
 
 
 fn main(){
-    let mut f = File::open("tests/NonTest.bp").unwrap();
+    let mut f = File::open("tests/Android.bp").unwrap();
     let mut str = String::new();
     f.read_to_string(&mut str).unwrap();
 
-    let mut ast_gen = ASTGenerator::from(&str).unwrap();
+    let mut ast_gen = ASTGenerator::from(&*str).unwrap();
     for n in ast_gen{
         dbg!(n.unwrap());
     }

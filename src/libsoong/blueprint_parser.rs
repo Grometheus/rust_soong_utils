@@ -1,5 +1,3 @@
-// TODO: We must figure out how to properly figure out lines!!!
-
 use crate::libsoong::errors::*;
 use std::{
     collections::HashMap,
@@ -66,7 +64,8 @@ impl<'a> StrStr<'a> {
     /// - `advance_by`: How many characters to advance the parser position
     ///
     /// # Returns
-    /// `Some(&str)` of consumed text (adjusted by offset), or `None` if initial window fails.
+    /// `Some(&str)` of consumed text (adjusted by offset), or `None` if a value not matching the
+    /// predicate is not found
     fn consume_while_windowed<const N: usize, F>(
         &mut self,
         mut predicate: F,
@@ -84,20 +83,26 @@ impl<'a> StrStr<'a> {
             if let Some(c) = itr.next() {
                 window[i] = c;
             } else {
-                return None;
+                return Some("");
             }
         }
 
         let mut i: usize = 0;
+        let mut did_break = false;
 
-        for c in itr {
+        for c in &mut itr {
             if !predicate(&window) {
+                did_break = true;
                 break;
             }
 
             i += 1;
             window.rotate_left(1);
             window[N - 1] = c;
+        }
+
+        if !did_break && predicate(&window) {
+            return None;
         }
 
         let output_end_idx = i.saturating_add_signed(output_offset);
@@ -236,54 +241,40 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
             }
             Some('"') => {
                 ss.increment();
-                let r = TokenValue::String(
-                    ss.consume_while_windowed(
-                        |win: &[char; 2]| win[1] != '"',
-                        1,
-                        2,
-                    )
-                    .unwrap_or(""),
-                );
-                if (ss.curr.is_empty()) {
-                    Err(ParseError::from_ctx(
-                        ParseErrorType::ExpectedCharactor,
-                        "Could not find end to string",
-                        ss.origin.to_string(),
-                        pre_line,
-                        pre_col,
-                    ))?
-                }
-                r
+                TokenValue::String(
+                    match ss.consume_while_windowed(|win: &[char; 2]| win[1] != '"', 1, 2) {
+                        Some(x) => x,
+                        None => Err(ParseError::from_ctx(
+                            ParseErrorType::ExpectedCharactor,
+                            "Could not find end to string",
+                            ss.origin.to_string(),
+                            pre_line,
+                            pre_col,
+                        ))?,
+                    },
+                )
             }
             Some('/') => {
                 ss.increment();
 
                 match ss.increment() {
                     Some('/') => TokenValue::SingleLineComment(ss.consume_while(|c| c != '\n')),
-                    Some('*') => {
-                        let r = TokenValue::MultilineComment(
-                            ss.consume_while_windowed(
-                                |win: &[char; 2]| !matches!(win, ['*', '/']),
-                                0,
-                                2,
-                            )
-                            .unwrap_or(""),
-                        );
-                        if (ss.curr.is_empty()) {
-                            Err(ParseError::from_ctx(
+                    Some('*') => TokenValue::MultilineComment(
+                        match ss.consume_while_windowed(
+                            |win: &[char; 2]| !matches!(win, ['*', '/']),
+                            0,
+                            2,
+                        ) {
+                            Some(x) => x,
+                            None => Err(ParseError::from_ctx(
                                 ParseErrorType::ExpectedCharactor,
                                 "Could not find end to comment",
                                 ss.origin.to_string(),
                                 pre_line,
                                 pre_col,
-                            ))?
-                        }
-
-                        ss.increment();
-                        ss.increment();
-
-                        r
-                    }
+                            ))?,
+                        },
+                    ),
 
                     None | Some(_) => Err(ParseError::from_ctx(
                         ParseErrorType::ExpectedCharactor,
@@ -609,7 +600,7 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
                 _ => expected_tok_err!(
                     file_ctx,
                     "Minus sign must be followed by an integer",
-                    next_col,
+                    next_line,
                     next_col
                 ),
             }
