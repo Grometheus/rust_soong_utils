@@ -2,8 +2,8 @@ use std::{error::Error, fmt::Debug};
 
 #[derive(Debug)]
 pub enum ParseErrorType {
-    ExpectedCharactor,
-    UnExpectedCharactor,
+    ExpectedCharacter,
+    UnExpectedCharacter,
     InvalidInteger,
 }
 

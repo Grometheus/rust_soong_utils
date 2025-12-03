@@ -11,7 +11,7 @@ fn main(){
     let mut str = String::new();
     f.read_to_string(&mut str).unwrap();
 
-    let mut ast_gen = ASTGenerator::from(&*str).unwrap();
+    let mut ast_gen = ASTGenerator::from("foo = \"bar:\\\" \"").unwrap();
     for n in ast_gen{
         dbg!(n.unwrap());
     }

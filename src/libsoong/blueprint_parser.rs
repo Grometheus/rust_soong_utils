@@ -242,10 +242,10 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
             Some('"') => {
                 ss.increment();
                 TokenValue::String(
-                    match ss.consume_while_windowed(|win: &[char; 2]| win[1] != '"', 1, 2) {
+                    match ss.consume_while_windowed(|win: &[char; 2]| win[0] == '\\' || win[1] != '"', 1, 2) {
                         Some(x) => x,
                         None => Err(ParseError::from_ctx(
-                            ParseErrorType::ExpectedCharactor,
+                            ParseErrorType::ExpectedCharacter,
                             "Could not find end to string",
                             ss.origin.to_string(),
                             pre_line,
@@ -267,7 +267,7 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                         ) {
                             Some(x) => x,
                             None => Err(ParseError::from_ctx(
-                                ParseErrorType::ExpectedCharactor,
+                                ParseErrorType::ExpectedCharacter,
                                 "Could not find end to comment",
                                 ss.origin.to_string(),
                                 pre_line,
@@ -277,8 +277,8 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
                     ),
 
                     None | Some(_) => Err(ParseError::from_ctx(
-                        ParseErrorType::ExpectedCharactor,
-                        "Unexpeced charactor after backslash",
+                        ParseErrorType::ExpectedCharacter,
+                        "Unexpeced character after backslash",
                         ss.origin.to_string(),
                         pre_line,
                         pre_col,
@@ -289,8 +289,8 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
             Some(c) => {
                 dbg!(ss.curr);
                 Err(ParseError::from_ctx(
-                    ParseErrorType::UnExpectedCharactor,
-                    format!("Unknown charactor during tokenization: '{}'", c).leak(),
+                    ParseErrorType::UnExpectedCharacter,
+                    format!("Unknown character during tokenization: '{}'", c).leak(),
                     ss.origin.to_string(),
                     pre_line,
                     pre_col,
@@ -339,7 +339,7 @@ fn consume_white(toks: TokenIter) {
 
 macro_rules! unexpected_err {
     ($msg : expr) => {
-        Err(ParseError::from(ParseErrorType::UnExpectedCharactor, $msg))?
+        Err(ParseError::from(ParseErrorType::UnExpectedCharacter, $msg))?
     };
 }
 macro_rules! unexpected_eof_err {
@@ -351,7 +351,7 @@ macro_rules! unexpected_eof_err {
 macro_rules! expected_tok_err {
     ($file_ctx:expr, $msg:expr, $line:expr, $col:expr) => {
         Err(ParseError::from_ctx(
-            ParseErrorType::ExpectedCharactor,
+            ParseErrorType::ExpectedCharacter,
             $msg,
             $file_ctx.to_string(),
             $line,
@@ -567,7 +567,7 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
         }
 
         TokenValue::AddOp => Err(ParseError::from_ctx(
-            ParseErrorType::UnExpectedCharactor,
+            ParseErrorType::UnExpectedCharacter,
             "A plus sign must follow a value",
             file_ctx.to_string(),
             tok.line,
