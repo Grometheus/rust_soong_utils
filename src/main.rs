@@ -1,20 +1,14 @@
-use std::{fs::File, io::Read};
-
-use crate::libsoong::blueprint_parser::ASTGenerator;
+use std::{path::Path};
 
 mod libsoong;
 
 
 
 fn main(){
-    let mut f = File::open("tests/Android.bp").unwrap();
-    let mut str = String::new();
-    f.read_to_string(&mut str).unwrap();
+    let mut state = libsoong::blueprint_evaluator::EvaluationState::new();
 
-    let mut ast_gen = ASTGenerator::from("foo = \"bar:\\\" \"").unwrap();
-    for n in ast_gen{
-        dbg!(n.unwrap());
-    }
+    state.injest_directory(Path::new("/home/mitch/Documents/grom/base")).unwrap();
+
 
 
 
