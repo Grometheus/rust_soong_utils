@@ -309,7 +309,7 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
     Ok(tokens)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BlueprintValue {
     Integer(i64),
     UnknownIdentifer(String),

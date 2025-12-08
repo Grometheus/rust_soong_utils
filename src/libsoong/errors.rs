@@ -10,6 +10,8 @@ pub enum ParseErrorType {
     ExpectedCharacter,
     UnExpectedCharacter,
     InvalidInteger,
+
+    UnexpectedValue,
 }
 
 pub struct ParseCtx {
@@ -102,4 +104,4 @@ impl Display for ParseError {
     }
 }
 
-impl Error for ParseError;
+impl Error for ParseError{}

@@ -6,7 +6,7 @@ number = 1
 number += 2
 string = "string"
 string += "_suffix"
-scope {
+scope = {
     name: "target",
 }
 scope += {

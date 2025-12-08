@@ -5,5 +5,4 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-log = "0.4.29"
 strum_macros = "0.27.2"
