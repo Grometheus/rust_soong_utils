@@ -1,8 +1,11 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::metadata;
 use std::fs::read_dir;
 use std::fs::DirEntry;
+use std::fs::File;
 use std::io;
+use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,51 +15,53 @@ use crate::libsoong::blueprint_parser::*;
 use crate::libsoong::errors::*;
 use anyhow::{Context, Result};
 
-
-struct DirState {
-
-}
+struct DirState {}
 impl DirState {
-    fn new() -> DirState{
-        DirState {  }
+    fn new() -> DirState {
+        DirState {}
     }
-
 }
 
 pub struct EvaluationState {
-    dir_states : HashMap<PathBuf, Rc<DirState>>
-
+    dir_states: HashMap<PathBuf, Rc<RefCell<DirState>>>,
 }
 
 impl EvaluationState {
     pub fn new() -> EvaluationState {
         EvaluationState {
-            dir_states :HashMap::new()
+            dir_states: HashMap::new(),
         }
     }
 
-    fn get_or_create_dir_state(&mut self, dir: &Path) -> Rc<DirState> {
+    fn get_or_create_dir_state(&mut self, dir: &Path) -> Rc<RefCell<DirState>> {
         match self.dir_states.get(dir) {
             Some(r) => r.clone(),
             None => {
-                let r = Rc::new(DirState::new());
-            
+                let r = Rc::new(RefCell::new(DirState::new()));
+
                 self.dir_states.insert(dir.to_path_buf(), r.clone());
                 r
             }
         }
-}
+    }
 
     pub fn injest_file(&mut self, path: &Path) -> Result<()> {
         self.injest_file_to_path(path, path)
     }
     pub fn injest_file_to_path(&mut self, path: &Path, internel_path: &Path) -> Result<()> {
-        path.to_path_buf();
+        let mut f =
+            File::open(dbg!(path)).with_context(|| format!("Cannot open file during injestion"))?;
+        let mut file_contents = String::new();
 
-        let state = self.get_or_create_dir_state(path.parent().unwrap());
+        f.read_to_string(&mut file_contents)
+            .with_context(|| "Cannot read file contents during injestion")?;
 
+        let state = self.get_or_create_dir_state(path.parent().expect("Parent dir must exist"));
+        let state = state.borrow_mut();
 
-        todo!()
+        for line in (ASTGenerator::from(&file_contents)?) {}
+
+        Ok(())
     }
 
     pub fn injest_directory(&mut self, dir: &Path) -> Result<()> {

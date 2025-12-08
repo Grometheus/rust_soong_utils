@@ -1,6 +1,11 @@
-use std::{error::Error, fmt::Debug, io};
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+    io,
+};
+use strum_macros::Display;
 
-#[derive(Debug)]
+#[derive(Display,Debug)]
 pub enum ParseErrorType {
     ExpectedCharacter,
     UnExpectedCharacter,
@@ -62,5 +67,39 @@ impl ParseError {
     }
 }
 
+impl Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Parse Error ")?;
+        if let Some(ctx) = &self.context {
+            write!(f, "at {},{}", ctx.line, ctx.col);
+        }
+
+        write!(f, " {}: {}", self.error_type, self.short_desc)?;
+
+        if let Some(ctx) = &self.context {
+            let line = match ctx.line { 
+                0 => ctx.file.lines().next(),
+                _ => ctx.file.lines().skip((ctx.line-1) as usize).next()
+
+            };
+            match line {
+                None => write!(f, "{{Error context was provided, but apears invalid}}")?,
+                Some(line) => {
+                    let mut spacer = String::with_capacity(ctx.col as usize);
+                    for c in line.chars().take(ctx.col as usize) {
+                        spacer.push(match c {
+                            '\t' => '\t',
+                            _ => ' '
+                        });
+                    }
+                    write!(f, "\n{}\n{}^^^\n", line, spacer);
+                }            
+            }
+        }
 
 
+        Ok(())
+    }
+}
+
+impl Error for ParseError;
