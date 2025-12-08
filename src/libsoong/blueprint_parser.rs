@@ -318,7 +318,7 @@ pub enum BlueprintValue {
     Negative(Box<BlueprintValue>),
     String(String),
 
-    Map(Vec<(String, BlueprintValue)>),
+    Map(HashMap<String, BlueprintValue>),
     List(Vec<BlueprintValue>),
 
     Add(Box<BlueprintValue>, Box<BlueprintValue>),
@@ -381,7 +381,7 @@ macro_rules! expect_value {
     }};
 }
 
-fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<Vec<(String, BlueprintValue)>, ParseError> {
+fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<HashMap<String, BlueprintValue>, ParseError> {
     expect_value!(
         toks,
         file_ctx,
@@ -390,7 +390,7 @@ fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<Vec<(String, BlueprintVa
         ()
     );
 
-    let mut ret = Vec::new();
+    let mut ret = HashMap::new();
     loop {
         consume_white(toks);
 
@@ -412,7 +412,7 @@ fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<Vec<(String, BlueprintVa
         consume_white(toks);
         let val = parse_value(toks, file_ctx)?;
 
-        ret.push((id.to_string(), val));
+        ret.insert(id.to_string(), val);
 
         consume_white(toks);
 
@@ -637,7 +637,7 @@ pub enum ASTLine {
 
     VarAddSet(String, BlueprintValue),
 
-    Rule(String, Vec<(String, BlueprintValue)>),
+    Rule(String, HashMap<String, BlueprintValue>),
 }
 fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError> {
     let id = expect_value!(

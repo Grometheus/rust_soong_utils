@@ -16,6 +16,7 @@ use crate::libsoong::blueprint_parser::*;
 use crate::libsoong::errors::*;
 use anyhow::{Context, Result};
 
+#[derive(Debug)]
 struct DirState {
     parent: Option<Weak<RefCell<DirState>>>,
 
@@ -51,90 +52,132 @@ impl DirState {
     }
 }
 
+#[derive(Debug)]
 pub struct EvaluationState {
     dir_states: HashMap<PathBuf, Rc<RefCell<DirState>>>,
+}
+
+#[derive(Debug)]
+pub struct FileState {
+    parent_dir_state: Rc<RefCell<DirState>>,
+    rules: HashMap<String, HashMap<String, BlueprintValue>>,
+}
+
+#[inline]
+fn neg_value_eval(
+    state: Rc<RefCell<DirState>>,
+    inner_value: BlueprintValue,
+) -> Result<BlueprintValue> {
+    use BlueprintValue::*;
+    match value_evaluate(state, inner_value)? {
+        Integer(num) => {
+            return Ok(Integer(-num));
+        }
+        UnknownIdentifer(ident) => Ok(UnknownIdentifer(ident)),
+
+        val @ _ => Err(ParseError::from(
+            ParseErrorType::UnexpectedValue,
+            format!("Cannot negate value of type {:?}", val),
+        )
+        .into()),
+    }
+}
+
+#[inline]
+fn unknown_identifier_eval(state: Rc<RefCell<DirState>>, name: String) -> Result<BlueprintValue> {
+    use BlueprintValue::*;
+    let value = match state.borrow().lookup_variable(&name) {
+        None => {
+            return Ok(UnknownIdentifer(name));
+        }
+        Some(val) => val,
+    };
+    value_evaluate(state, value)
+}
+#[inline]
+fn map_eval(
+    state: Rc<RefCell<DirState>>,
+    mut mapping: HashMap<String, BlueprintValue>,
+) -> Result<BlueprintValue> {
+    use BlueprintValue::*;
+
+    for (_, value) in mapping.iter_mut() {
+        *value = value_evaluate(state.clone(), value.clone())?;
+
+    }
+
+    Ok(Map(mapping))
+}
+
+#[inline]
+fn list_eval(state: Rc<RefCell<DirState>>, list: Vec<BlueprintValue>) -> Result<BlueprintValue> {
+    use BlueprintValue::*;
+    let mut new_vec = Vec::with_capacity(list.capacity());
+    for value in list {
+        new_vec.push(value_evaluate(state.clone(), value)?);
+    }
+
+    Ok(List(new_vec))
+}
+#[inline]
+fn add_eval(
+    state: Rc<RefCell<DirState>>,
+    a: BlueprintValue,
+    b: BlueprintValue,
+) -> Result<BlueprintValue> {
+    use BlueprintValue::*;
+    let a = value_evaluate(state.clone(), a)?;
+    let b = value_evaluate(state.clone(), b)?;
+
+    Ok(match (a, b) {
+        (Integer(a), Integer(b)) => Integer(a.saturating_add(b)),
+        (String(a), String(b)) => String(a + &b),
+        (List(mut a), List(mut b)) => {
+            a.append(&mut b);
+            List(a)
+        }
+        (Map(mut a), Map(mut b)) => {
+            a.extend(b);
+            Map(a)
+        }
+
+        // Allow for unresolved variables
+        (
+            a @ ((Integer(_) | String(_) | List(_) | Map(_)) | UnknownIdentifer(_)),
+            b @ ((Integer(_) | String(_) | List(_) | Map(_)) | UnknownIdentifer(_)),
+        ) => Add(Box::from(a), Box::from(b)),
+
+        (a, b) => {
+            return Err(ParseError::from(
+                ParseErrorType::UnexpectedValue,
+                format!("It is invalid to add {:?} and {:?}", a, b),
+            )
+            .into())
+        }
+    })
 }
 
 fn value_evaluate(state: Rc<RefCell<DirState>>, value: BlueprintValue) -> Result<BlueprintValue> {
     use BlueprintValue::*;
     match value {
         Integer(_) | String(_) => Ok(value),
-        UnknownIdentifer(name) => {
-            let value = match state.borrow().lookup_variable(&name) {
-                None => {
-                    return Ok(UnknownIdentifer(name));
-                }
-                Some(val) => val,
-            };
-            value_evaluate(state, value)
-        }
+        UnknownIdentifer(name) => unknown_identifier_eval(state, name),
 
         // used for unknown identifiers
-        Negative(val) => match value_evaluate(state, val.as_ref().clone())? {
-            Integer(num) => {
-                return Ok(Integer(-num));
-            }
-            UnknownIdentifer(ident) => Ok(UnknownIdentifer(ident)),
+        Negative(val) => neg_value_eval(state, val.as_ref().clone()),
 
-            _ => Err(ParseError::from(
-                ParseErrorType::UnexpectedValue,
-                format!("Cannot negate value of type {:?}", val.as_ref()),
-            )
-            .into()),
-        },
+        Map(mapping) => map_eval(state, mapping),
+        List(list) => list_eval(state, list),
 
-        Map(mapping) => {
-            let mut new_vec = Vec::with_capacity(mapping.capacity());
-            for (str, value) in mapping {
-                new_vec.push((str, value_evaluate(state.clone(), value)?));
-            }
-
-            Ok(Map(new_vec))
-        }
-        List(list) => {
-            let mut new_vec = Vec::with_capacity(list.capacity());
-            for value in list {
-                new_vec.push(value_evaluate(state.clone(), value)?);
-            }
-
-            Ok(List(new_vec))
-        }
-
-        Add(a, b) => {
-            let a = value_evaluate(state.clone(), a.as_ref().clone())?;
-            let b = value_evaluate(state.clone(), b.as_ref().clone())?;
-
-            Ok(match (a, b) {
-                (Integer(a), Integer(b)) => Integer(a.saturating_add(b)),
-                (String(a), String(b)) => String(a + &b),
-                (List(mut a), List(mut b)) => {
-                    a.append(&mut b);
-                    List(a)
-                }
-                (Map(mut a), Map(mut b)) => {
-                    a.append(&mut b);
-                    Map(a)
-                }
-
-                // Allow for unresolved variables
-                (
-                    a @ ((Integer(_) | String(_) | List(_) | Map(_)) | UnknownIdentifer(_)),
-                    b @ ((Integer(_) | String(_) | List(_) | Map(_)) | UnknownIdentifer(_)),
-                ) => Add(Box::from(a), Box::from(b)),
-
-                (a, b) => {
-                    return Err(ParseError::from(
-                        ParseErrorType::UnexpectedValue,
-                        format!("It is invalid to add {:?} and {:?}", a, b),
-                    )
-                    .into())
-                }
-            })
-        }
+        Add(a, b) => add_eval(state, a.as_ref().clone(), b.as_ref().clone()),
     }
 }
 
-fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<()> {
+fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<FileState> {
+    let mut out = FileState {
+        parent_dir_state: state.clone(),
+        rules: HashMap::with_capacity(64),
+    };
     for line in ASTGenerator::from(file)? {
         let line = line?;
 
@@ -150,19 +193,20 @@ fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<()> {
                 })?;
 
                 // TODO: This can be refactored to remove the heap
-                let value = value_evaluate(
-                    state.clone(),
-                    BlueprintValue::Add(Box::from(original), Box::from(value)),
-                )?;
+                let value = add_eval(state.clone(), original, value)?;
 
                 state.borrow_mut().insert_variable(ident, value);
             }
-            ASTLine::Rule(ident, val) => {
-                // TODO: Register the rule
+            ASTLine::Rule(ident, value) => {
+                let value = match map_eval(state.clone(), value)? {
+                    BlueprintValue::Map(map) => map,
+                    _ => unreachable!(),
+                };
+                out.rules.insert(ident, value);
             }
         };
     }
-    Ok(())
+    Ok(dbg!(out))
 }
 
 impl EvaluationState {
@@ -187,12 +231,16 @@ impl EvaluationState {
         r
     }
 
-    pub fn injest_file(&mut self, path: &Path) -> Result<()> {
+    pub fn injest_file(&mut self, path: &Path) -> Result<(FileState)> {
         self.injest_file_to_path(path, path)
     }
-    pub fn injest_file_to_path(&mut self, path: &Path, internel_path: &Path) -> Result<()> {
+    pub fn injest_file_to_path(
+        &mut self,
+        path: &Path,
+        internel_path: &Path,
+    ) -> Result<(FileState)> {
         let mut f =
-            File::open(path).with_context(|| format!("Cannot open file during injestion"))?;
+            File::open(dbg!(path)).with_context(|| format!("Cannot open file during injestion"))?;
         let mut file_contents = String::new();
 
         f.read_to_string(&mut file_contents).with_context(|| {
