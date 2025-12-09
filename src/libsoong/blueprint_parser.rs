@@ -8,8 +8,6 @@ use std::{
     vec::IntoIter,
 };
 
-
-
 //=============================
 //    Tokeniser section
 //=============================
@@ -244,7 +242,11 @@ fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
             Some('"') => {
                 ss.increment();
                 TokenValue::String(
-                    match ss.consume_while_windowed(|win: &[char; 2]| win[0] == '\\' || win[1] != '"', 1, 2) {
+                    match ss.consume_while_windowed(
+                        |win: &[char; 2]| win[0] == '\\' || win[1] != '"',
+                        1,
+                        2,
+                    ) {
                         Some(x) => x,
                         None => Err(ParseError::from_ctx(
                             ParseErrorType::ExpectedCharacter,
@@ -381,7 +383,10 @@ macro_rules! expect_value {
     }};
 }
 
-fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<HashMap<String, BlueprintValue>, ParseError> {
+fn parse_map(
+    toks: TokenIter,
+    file_ctx: &str,
+) -> Result<HashMap<String, BlueprintValue>, ParseError> {
     expect_value!(
         toks,
         file_ctx,
@@ -406,7 +411,13 @@ fn parse_map(toks: TokenIter, file_ctx: &str) -> Result<HashMap<String, Blueprin
             break;
         }
 
-        let id = expect_value!(toks, file_ctx, TokenValue::Identifier(id), "Identifier".to_string(), id);
+        let id = expect_value!(
+            toks,
+            file_ctx,
+            TokenValue::Identifier(id),
+            "Identifier".to_string(),
+            id
+        );
         consume_white(toks);
         expect_value!(toks, file_ctx, TokenValue::Colon, "':'".to_string(), ());
         consume_white(toks);
@@ -502,7 +513,12 @@ fn parse_list(toks: TokenIter, file_ctx: &str) -> Result<Vec<BlueprintValue>, Pa
                 value: tok,
                 line,
                 col,
-            }) => expected_tok_err!(file_ctx, format!("Expected: ',' or ']', got {:?}", *tok), *line, *col),
+            }) => expected_tok_err!(
+                file_ctx,
+                format!("Expected: ',' or ']', got {:?}", *tok),
+                *line,
+                *col
+            ),
             None => unexpected_eof_err!(),
         }
     }

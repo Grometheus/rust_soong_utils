@@ -5,7 +5,7 @@ use std::{
 };
 use strum_macros::Display;
 
-#[derive(Display,Debug)]
+#[derive(Display, Debug)]
 pub enum ParseErrorType {
     ExpectedCharacter,
     UnExpectedCharacter,
@@ -79,10 +79,9 @@ impl Display for ParseError {
         write!(f, " {}: {}", self.error_type, self.short_desc)?;
 
         if let Some(ctx) = &self.context {
-            let line = match ctx.line { 
+            let line = match ctx.line {
                 0 => ctx.file.lines().next(),
-                _ => ctx.file.lines().skip((ctx.line-1) as usize).next()
-
+                _ => ctx.file.lines().skip((ctx.line - 1) as usize).next(),
             };
             match line {
                 None => write!(f, "{{Error context was provided, but apears invalid}}")?,
@@ -91,17 +90,16 @@ impl Display for ParseError {
                     for c in line.chars().take(ctx.col as usize) {
                         spacer.push(match c {
                             '\t' => '\t',
-                            _ => ' '
+                            _ => ' ',
                         });
                     }
                     write!(f, "\n{}\n{}^^^\n", line, spacer);
-                }            
+                }
             }
         }
-
 
         Ok(())
     }
 }
 
-impl Error for ParseError{}
+impl Error for ParseError {}

@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::metadata;
-use std::fs::read_dir;
 use std::fs::DirEntry;
 use std::fs::File;
+use std::fs::metadata;
+use std::fs::read_dir;
 use std::io;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
@@ -60,7 +60,7 @@ pub struct EvaluationState {
 #[derive(Debug)]
 pub struct FileState {
     parent_dir_state: Rc<RefCell<DirState>>,
-    rules: HashMap<String, HashMap<String, BlueprintValue>>,
+    rules: Vec<(String, HashMap<String, BlueprintValue>)>,
 }
 
 #[inline]
@@ -103,7 +103,6 @@ fn map_eval(
 
     for (_, value) in mapping.iter_mut() {
         *value = value_evaluate(state.clone(), value.clone())?;
-
     }
 
     Ok(Map(mapping))
@@ -152,7 +151,7 @@ fn add_eval(
                 ParseErrorType::UnexpectedValue,
                 format!("It is invalid to add {:?} and {:?}", a, b),
             )
-            .into())
+            .into());
         }
     })
 }
@@ -173,10 +172,19 @@ fn value_evaluate(state: Rc<RefCell<DirState>>, value: BlueprintValue) -> Result
     }
 }
 
+fn evaluate_special_rules(
+    dir_state: Rc<RefCell<DirState>>,
+    file_state: &mut FileState,
+
+    rule: &mut HashMap<String, BlueprintValue>,
+) -> Result<bool> {
+    Ok(true)
+}
+
 fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<FileState> {
-    let mut out = FileState {
+    let mut file_state = FileState {
         parent_dir_state: state.clone(),
-        rules: HashMap::with_capacity(64),
+        rules: Vec::with_capacity(64),
     };
     for line in ASTGenerator::from(file)? {
         let line = line?;
@@ -198,15 +206,19 @@ fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<FileState> 
                 state.borrow_mut().insert_variable(ident, value);
             }
             ASTLine::Rule(ident, value) => {
-                let value = match map_eval(state.clone(), value)? {
+                let mut value = match map_eval(state.clone(), value)? {
                     BlueprintValue::Map(map) => map,
                     _ => unreachable!(),
                 };
-                out.rules.insert(ident, value);
+                let do_add = evaluate_special_rules(state.clone(), &mut file_state, &mut value)?;
+
+                if do_add {
+                    file_state.rules.push((ident, value));
+                }
             }
         };
     }
-    Ok(dbg!(out))
+    Ok(file_state)
 }
 
 impl EvaluationState {
@@ -240,7 +252,7 @@ impl EvaluationState {
         internel_path: &Path,
     ) -> Result<(FileState)> {
         let mut f =
-            File::open(dbg!(path)).with_context(|| format!("Cannot open file during injestion"))?;
+            File::open(path).with_context(|| format!("Cannot open file during injestion"))?;
         let mut file_contents = String::new();
 
         f.read_to_string(&mut file_contents).with_context(|| {
