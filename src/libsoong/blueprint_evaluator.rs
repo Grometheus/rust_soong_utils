@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::DirEntry;
-use std::fs::File;
 use std::fs::metadata;
 use std::fs::read_dir;
+use std::fs::DirEntry;
+use std::fs::File;
 use std::io;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
@@ -138,7 +138,8 @@ fn add_eval(
         (Map(mut a), Map(mut b)) => {
             a.extend(b);
             Map(a)
-        }
+        },
+
 
         // Allow for unresolved variables
         (
