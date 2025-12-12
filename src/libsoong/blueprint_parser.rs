@@ -1,3 +1,37 @@
+/*
+This file is part of the Grometheus project
+Copyright (C) PsychedelicPalimpsest - 2025
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+
+
+//=============================
+//           Notes
+//=============================
+//
+// This file is responsible for the EARLY stage parsing of blueprint files.
+//
+// Tokenization:
+//   This grabs everything from a file (refer to TokenValue for more)
+//   Nothing special is done
+//
+// AST:
+//   Makes a tree of the content, strips out any comments or white space. 
+
+
 use crate::libsoong::errors::*;
 use std::{
     collections::HashMap,
@@ -141,17 +175,22 @@ impl<'a> StrStr<'a> {
 }
 
 #[derive(Debug)]
-enum TokenValue<'a> {
+pub enum TokenValue<'a> {
+    // White tokens
     Whitespace,
     SingleLineComment(&'a str),
     MultilineComment(&'a str),
 
+    // Unary op
     SubOp,
 
+    // Binary ops
     AddOp,
     AddEqOp,
 
     EqOp,
+
+    // Misc
 
     OpenCurlyBracket,
     CloseCurlyBracket,
@@ -162,21 +201,23 @@ enum TokenValue<'a> {
     Colon,
     Comma,
 
-    Number(&'a str), // Todo: What is a number?
+    // Containers
+    // Does NOT do any sanitization or parsing
+    Number(&'a str), 
     String(&'a str),
 
     Identifier(&'a str),
 }
 
 #[derive(Debug)]
-struct Token<'a> {
+pub struct Token<'a> {
     value: TokenValue<'a>,
 
     line: u64,
     col: u64,
 }
 
-fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
+pub fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
     // Could be fine-tuned
     let mut tokens: Vec<Token> = Vec::with_capacity(input.len() / 4);
 
@@ -329,7 +370,7 @@ pub enum BlueprintValue {
 type TokenIter<'a, 'b> = &'a mut Peekable<IntoIter<Token<'b>>>;
 type TokenIterVal<'a> = Peekable<IntoIter<Token<'a>>>;
 
-fn consume_white(toks: TokenIter) {
+pub fn consume_white(toks: TokenIter) {
     while let Some(Token {
         value:
             TokenValue::Whitespace | TokenValue::SingleLineComment(_) | TokenValue::MultilineComment(_),

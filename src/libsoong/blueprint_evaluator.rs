@@ -1,5 +1,34 @@
+/*
+This file is part of the Grometheus project
+Copyright (C) PsychedelicPalimpsest - 2025
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+//=============================
+//           Notes
+//=============================
+//
+// This file is responsible for the progressive 
+// evaluation system. 
+
+
+
+
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::metadata;
 use std::fs::read_dir;
 use std::fs::DirEntry;
@@ -54,14 +83,67 @@ impl DirState {
 
 #[derive(Debug)]
 pub struct EvaluationState {
+    // Internal path to dir state
     dir_states: HashMap<PathBuf, Rc<RefCell<DirState>>>,
+    // Internal path to (real path, soong file state)
+    files : HashMap<PathBuf, (PathBuf, FileState)> 
 }
 
 #[derive(Debug)]
 pub struct FileState {
     parent_dir_state: Rc<RefCell<DirState>>,
     rules: Vec<(String, HashMap<String, BlueprintValue>)>,
+
+    // SAFTY: 
+    // This MUST be regenerated whenever you touch `rules`
+    undeclaired_identifiers : HashSet<*mut BlueprintValue>
 }
+
+
+
+fn regenerate_for(hashset : &mut HashSet<*mut BlueprintValue>, value : &mut BlueprintValue) {
+    use BlueprintValue::*;
+    match value {
+        Integer(_) | String(_) => {},
+        UnknownIdentifer(_) => {
+            hashset.insert(value as *mut BlueprintValue);
+        },
+        Negative(val) => {regenerate_for(hashset, val.as_mut());}
+        List(listing) => {
+            for val in listing.iter_mut() {
+                regenerate_for(hashset, val);
+            }
+        },
+        Map(mapping) => {
+            for (_, val) in mapping.iter_mut() {
+                regenerate_for(hashset, val);
+            }
+        },
+        Add(x, y) => {
+            regenerate_for(hashset, x);
+            regenerate_for(hashset, y);
+        }
+    }
+
+}
+impl FileState {
+
+    pub fn regenerate_identifiers(&mut self) {
+        let mut undeclaired_identifiers = HashSet::with_capacity(self.undeclaired_identifiers.capacity());
+
+        for (_, rule) in self.rules.iter_mut() {
+            for (_, val) in rule.iter_mut() {
+                regenerate_for(&mut undeclaired_identifiers, val);
+            }
+        }
+        self.undeclaired_identifiers = undeclaired_identifiers;
+        
+
+    }
+
+
+}
+
 
 #[inline]
 fn neg_value_eval(
@@ -138,8 +220,7 @@ fn add_eval(
         (Map(mut a), Map(mut b)) => {
             a.extend(b);
             Map(a)
-        },
-
+        }
 
         // Allow for unresolved variables
         (
@@ -173,19 +254,13 @@ fn value_evaluate(state: Rc<RefCell<DirState>>, value: BlueprintValue) -> Result
     }
 }
 
-fn evaluate_special_rules(
-    dir_state: Rc<RefCell<DirState>>,
-    file_state: &mut FileState,
-
-    rule: &mut HashMap<String, BlueprintValue>,
-) -> Result<bool> {
-    Ok(true)
-}
 
 fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<FileState> {
     let mut file_state = FileState {
         parent_dir_state: state.clone(),
         rules: Vec::with_capacity(64),
+
+        undeclaired_identifiers: HashSet::new()
     };
     for line in ASTGenerator::from(file)? {
         let line = line?;
@@ -211,14 +286,12 @@ fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<FileState> 
                     BlueprintValue::Map(map) => map,
                     _ => unreachable!(),
                 };
-                let do_add = evaluate_special_rules(state.clone(), &mut file_state, &mut value)?;
 
-                if do_add {
-                    file_state.rules.push((ident, value));
-                }
+                file_state.rules.push((ident, value));
             }
         };
     }
+    file_state.regenerate_identifiers();
     Ok(file_state)
 }
 
@@ -226,6 +299,7 @@ impl EvaluationState {
     pub fn new() -> EvaluationState {
         EvaluationState {
             dir_states: HashMap::new(),
+            files : HashMap::new()
         }
     }
 
@@ -244,14 +318,14 @@ impl EvaluationState {
         r
     }
 
-    pub fn injest_file(&mut self, path: &Path) -> Result<(FileState)> {
+    pub fn injest_file(&mut self, path: &Path) -> Result<()> {
         self.injest_file_to_path(path, path)
     }
     pub fn injest_file_to_path(
         &mut self,
         path: &Path,
         internel_path: &Path,
-    ) -> Result<(FileState)> {
+    ) -> Result<()> {
         let mut f =
             File::open(path).with_context(|| format!("Cannot open file during injestion"))?;
         let mut file_contents = String::new();
@@ -263,14 +337,24 @@ impl EvaluationState {
             )
         })?;
 
-        let state = self.get_or_create_dir_state(path.parent().expect("Parent dir must exist"));
+        let state = self.get_or_create_dir_state(internel_path.parent().expect("Parent dir must exist"));
 
-        file_evaluate(state, &file_contents).with_context(|| {
+        let file = file_evaluate(state, &file_contents).with_context(|| {
             format!(
                 "Parsing error during injestion: {}",
                 path.to_str().unwrap_or("")
             )
-        })
+        })?;
+
+        for id in &file.undeclaired_identifiers {
+            let x = dbg!(unsafe {&**id});
+
+        }
+
+
+        self.files.insert(internel_path.to_path_buf(), (path.to_path_buf(), file));
+
+        Ok(())
     }
 
     pub fn injest_directory(&mut self, dir: &Path) -> Result<()> {
