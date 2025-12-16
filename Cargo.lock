@@ -38,9 +38,9 @@ dependencies = [
 
 [[package]]
 name = "light-rc-arena"
-version = "0.1.2"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5cadb15e748b05313761e277f784108faf334653e2fd02266c1c20735b21f3a"
+checksum = "c3fda356f91a76294fdd0bfab4aa085169c8812fdf41f0a9cea87fe69eba553e"
 
 [[package]]
 name = "proc-macro2"

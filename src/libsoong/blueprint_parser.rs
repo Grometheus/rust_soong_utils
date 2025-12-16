@@ -351,7 +351,8 @@ pub fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
     Ok(tokens)
 }
 
-const N: usize = 64;
+// Page size of the arena
+const N: usize = 128;
 pub type BlueprintValueRef = ArenaRef<RefCell<BlueprintValue>, N>;
 pub type BlueprintArena = Arena<RefCell<BlueprintValue>, N>;
 
@@ -428,7 +429,7 @@ macro_rules! expect_value {
 }
 
 fn parse_map<'a>(
-    arena: BlueprintArena,
+    arena: &BlueprintArena,
     toks: TokenIter,
     file_ctx: &str,
 ) -> Result<HashMap<String, BlueprintValueRef>, ParseError> {
@@ -466,7 +467,7 @@ fn parse_map<'a>(
         consume_white(toks);
         expect_value!(toks, file_ctx, TokenValue::Colon, "':'".to_string(), ());
         consume_white(toks);
-        let val = parse_value(arena.clone(), toks, file_ctx)?;
+        let val = parse_value(arena, toks, file_ctx)?;
 
         ret.insert(id.to_string(), val);
 
@@ -511,7 +512,7 @@ fn parse_map<'a>(
 }
 
 fn parse_list<'a>(
-    arena: BlueprintArena,
+    arena: &BlueprintArena,
     toks: TokenIter,
     file_ctx: &str,
 ) -> Result<Vec<BlueprintValueRef>, ParseError> {
@@ -537,7 +538,7 @@ fn parse_list<'a>(
             break;
         }
 
-        let val = parse_value(arena.clone(), toks, file_ctx)?;
+        let val = parse_value(arena, toks, file_ctx)?;
         ret.push(val);
 
         consume_white(toks);
@@ -584,7 +585,7 @@ fn parse_list<'a>(
 }
 
 fn parse_value<'a>(
-    arena: BlueprintArena,
+    arena: &BlueprintArena,
     toks: TokenIter,
     file_ctx: &str,
 ) -> Result<BlueprintValueRef, ParseError> {
@@ -629,8 +630,8 @@ fn parse_value<'a>(
             let _ = toks.next();
             BlueprintValue::UnknownIdentifer(id.to_string())
         }
-        TokenValue::OpenCurlyBracket => BlueprintValue::Map(parse_map(arena.clone(), toks, file_ctx)?),
-        TokenValue::OpenSquareBracket => BlueprintValue::List(parse_list(arena.clone(), toks, file_ctx)?),
+        TokenValue::OpenCurlyBracket => BlueprintValue::Map(parse_map(arena, toks, file_ctx)?),
+        TokenValue::OpenSquareBracket => BlueprintValue::List(parse_list(arena, toks, file_ctx)?),
 
         TokenValue::String(str) => {
             let _ = toks.next();
@@ -665,7 +666,7 @@ fn parse_value<'a>(
                 ),
             };
 
-            let val = parse_value(arena.clone(), toks, file_ctx)?;
+            let val = parse_value(arena, toks, file_ctx)?;
 
             match &*val.clone().borrow() {
                 BlueprintValue::Integer(i) => BlueprintValue::Integer(-i.clone()),
@@ -692,7 +693,7 @@ fn parse_value<'a>(
             let _ = toks.next();
             consume_white(toks);
 
-            let last = parse_value(arena.clone(), toks, file_ctx)?;
+            let last = parse_value(arena, toks, file_ctx)?;
             let bv = BlueprintValue::Add(arena.alloc(RefCell::new(first)), last);
             arena.alloc(RefCell::new(bv))
         }
@@ -704,6 +705,7 @@ fn parse_value<'a>(
 //    AST section
 //=============================
 
+#[derive(Debug)]
 pub enum ASTLine {
     VarSet(String, BlueprintValueRef),
 
@@ -736,7 +738,7 @@ fn parse_ast_line(
             toks.next();
             consume_white(toks);
 
-            ASTLine::VarSet(id.to_string(), parse_value(arena, toks, file_ctx)?)
+            ASTLine::VarSet(id.to_string(), parse_value(&arena, toks, file_ctx)?)
         }
         Some(Token {
             value: TokenValue::AddEqOp,
@@ -746,7 +748,7 @@ fn parse_ast_line(
             toks.next();
             consume_white(toks);
 
-            ASTLine::VarAddSet(id.to_string(), parse_value(arena, toks, file_ctx)?)
+            ASTLine::VarAddSet(id.to_string(), parse_value(&arena, toks, file_ctx)?)
         }
         Some(Token {
             value: TokenValue::OpenCurlyBracket,
@@ -755,7 +757,7 @@ fn parse_ast_line(
         }) => {
             consume_white(toks);
 
-            let map = match &mut *parse_value(arena, toks, file_ctx)?.borrow_mut() {
+            let map = match &mut *parse_value(&arena, toks, file_ctx)?.borrow_mut() {
                 BlueprintValue::Map(map) => std::mem::take(map),
                 _ => unreachable!(),
             };
