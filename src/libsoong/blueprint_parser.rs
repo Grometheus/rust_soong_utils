@@ -16,8 +16,6 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-
-
 //=============================
 //           Notes
 //=============================
@@ -29,11 +27,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //   Nothing special is done
 //
 // AST:
-//   Makes a tree of the content, strips out any comments or white space. 
+//   Makes a tree of the content, strips out any comments or white space.
 
+use light_rc_arena::{Arena, ArenaRef};
 
 use crate::libsoong::errors::*;
 use std::{
+    cell::{Cell, RefCell},
     collections::HashMap,
     error::Error,
     iter::{self, Peekable},
@@ -191,7 +191,6 @@ pub enum TokenValue<'a> {
     EqOp,
 
     // Misc
-
     OpenCurlyBracket,
     CloseCurlyBracket,
 
@@ -203,7 +202,7 @@ pub enum TokenValue<'a> {
 
     // Containers
     // Does NOT do any sanitization or parsing
-    Number(&'a str), 
+    Number(&'a str),
     String(&'a str),
 
     Identifier(&'a str),
@@ -352,19 +351,23 @@ pub fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>, ParseError> {
     Ok(tokens)
 }
 
+const N: usize = 64;
+pub type BlueprintValueRef = ArenaRef<RefCell<BlueprintValue>, N>;
+pub type BlueprintArena = Arena<RefCell<BlueprintValue>, N>;
+
 #[derive(Debug, Clone)]
 pub enum BlueprintValue {
     Integer(i64),
     UnknownIdentifer(String),
 
     // used for unknown identifiers
-    Negative(Box<BlueprintValue>),
+    Negative(BlueprintValueRef),
     String(String),
 
-    Map(HashMap<String, BlueprintValue>),
-    List(Vec<BlueprintValue>),
+    Map(HashMap<String, BlueprintValueRef>),
+    List(Vec<BlueprintValueRef>),
 
-    Add(Box<BlueprintValue>, Box<BlueprintValue>),
+    Add(BlueprintValueRef, BlueprintValueRef),
 }
 
 type TokenIter<'a, 'b> = &'a mut Peekable<IntoIter<Token<'b>>>;
@@ -424,10 +427,11 @@ macro_rules! expect_value {
     }};
 }
 
-fn parse_map(
+fn parse_map<'a>(
+    arena: BlueprintArena,
     toks: TokenIter,
     file_ctx: &str,
-) -> Result<HashMap<String, BlueprintValue>, ParseError> {
+) -> Result<HashMap<String, BlueprintValueRef>, ParseError> {
     expect_value!(
         toks,
         file_ctx,
@@ -462,7 +466,7 @@ fn parse_map(
         consume_white(toks);
         expect_value!(toks, file_ctx, TokenValue::Colon, "':'".to_string(), ());
         consume_white(toks);
-        let val = parse_value(toks, file_ctx)?;
+        let val = parse_value(arena.clone(), toks, file_ctx)?;
 
         ret.insert(id.to_string(), val);
 
@@ -506,7 +510,11 @@ fn parse_map(
     Ok(ret)
 }
 
-fn parse_list(toks: TokenIter, file_ctx: &str) -> Result<Vec<BlueprintValue>, ParseError> {
+fn parse_list<'a>(
+    arena: BlueprintArena,
+    toks: TokenIter,
+    file_ctx: &str,
+) -> Result<Vec<BlueprintValueRef>, ParseError> {
     expect_value!(
         toks,
         file_ctx,
@@ -529,7 +537,8 @@ fn parse_list(toks: TokenIter, file_ctx: &str) -> Result<Vec<BlueprintValue>, Pa
             break;
         }
 
-        ret.push(parse_value(toks, file_ctx)?);
+        let val = parse_value(arena.clone(), toks, file_ctx)?;
+        ret.push(val);
 
         consume_white(toks);
 
@@ -574,7 +583,11 @@ fn parse_list(toks: TokenIter, file_ctx: &str) -> Result<Vec<BlueprintValue>, Pa
     Ok(ret)
 }
 
-fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseError> {
+fn parse_value<'a>(
+    arena: BlueprintArena,
+    toks: TokenIter,
+    file_ctx: &str,
+) -> Result<BlueprintValueRef, ParseError> {
     if let None = toks.peek() {
         panic!("Violation: Must not be at eof")
     }
@@ -616,8 +629,8 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
             let _ = toks.next();
             BlueprintValue::UnknownIdentifer(id.to_string())
         }
-        TokenValue::OpenCurlyBracket => BlueprintValue::Map(parse_map(toks, file_ctx)?),
-        TokenValue::OpenSquareBracket => BlueprintValue::List(parse_list(toks, file_ctx)?),
+        TokenValue::OpenCurlyBracket => BlueprintValue::Map(parse_map(arena.clone(), toks, file_ctx)?),
+        TokenValue::OpenSquareBracket => BlueprintValue::List(parse_list(arena.clone(), toks, file_ctx)?),
 
         TokenValue::String(str) => {
             let _ = toks.next();
@@ -652,10 +665,11 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
                 ),
             };
 
-            let val = parse_value(toks, file_ctx)?;
-            match val {
-                BlueprintValue::Integer(i) => BlueprintValue::Integer(-i),
-                BlueprintValue::UnknownIdentifer(_) => BlueprintValue::Negative(Box::from(val)),
+            let val = parse_value(arena.clone(), toks, file_ctx)?;
+
+            match &*val.clone().borrow() {
+                BlueprintValue::Integer(i) => BlueprintValue::Integer(-i.clone()),
+                BlueprintValue::UnknownIdentifer(_) => BlueprintValue::Negative(val),
                 _ => expected_tok_err!(
                     file_ctx,
                     "Minus sign must be followed by an integer".to_string(),
@@ -678,9 +692,11 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
             let _ = toks.next();
             consume_white(toks);
 
-            BlueprintValue::Add(Box::from(first), Box::from(parse_value(toks, file_ctx)?))
+            let last = parse_value(arena.clone(), toks, file_ctx)?;
+            let bv = BlueprintValue::Add(arena.alloc(RefCell::new(first)), last);
+            arena.alloc(RefCell::new(bv))
         }
-        _ => first,
+        _ => arena.alloc(RefCell::new(first)),
     })
 }
 
@@ -688,15 +704,18 @@ fn parse_value(toks: TokenIter, file_ctx: &str) -> Result<BlueprintValue, ParseE
 //    AST section
 //=============================
 
-#[derive(Debug)]
 pub enum ASTLine {
-    VarSet(String, BlueprintValue),
+    VarSet(String, BlueprintValueRef),
 
-    VarAddSet(String, BlueprintValue),
+    VarAddSet(String, BlueprintValueRef),
 
-    Rule(String, HashMap<String, BlueprintValue>),
+    Rule(String, HashMap<String, BlueprintValueRef>),
 }
-fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError> {
+fn parse_ast_line(
+    arena: BlueprintArena,
+    toks: TokenIter,
+    file_ctx: &str,
+) -> Result<ASTLine, ParseError> {
     let id = expect_value!(
         toks,
         file_ctx,
@@ -717,7 +736,7 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
             toks.next();
             consume_white(toks);
 
-            ASTLine::VarSet(id.to_string(), parse_value(toks, file_ctx)?)
+            ASTLine::VarSet(id.to_string(), parse_value(arena, toks, file_ctx)?)
         }
         Some(Token {
             value: TokenValue::AddEqOp,
@@ -727,7 +746,7 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
             toks.next();
             consume_white(toks);
 
-            ASTLine::VarAddSet(id.to_string(), parse_value(toks, file_ctx)?)
+            ASTLine::VarAddSet(id.to_string(), parse_value(arena, toks, file_ctx)?)
         }
         Some(Token {
             value: TokenValue::OpenCurlyBracket,
@@ -736,12 +755,13 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
         }) => {
             consume_white(toks);
 
+            let map = match &mut *parse_value(arena, toks, file_ctx)?.borrow_mut() {
+                BlueprintValue::Map(map) => std::mem::take(map),
+                _ => unreachable!(),
+            };
             ASTLine::Rule(
                 id.to_string(),
-                match parse_value(toks, file_ctx)? {
-                    BlueprintValue::Map(map) => map,
-                    _ => unreachable!(),
-                },
+                map
             )
         }
         Some(Token {
@@ -762,6 +782,8 @@ fn parse_ast_line(toks: TokenIter, file_ctx: &str) -> Result<ASTLine, ParseError
 pub struct ASTGenerator<'a> {
     token_iter: TokenIterVal<'a>,
     file: &'a str,
+
+    arena: BlueprintArena,
 }
 
 impl<'a> ASTGenerator<'a> {
@@ -769,7 +791,12 @@ impl<'a> ASTGenerator<'a> {
         Ok(ASTGenerator {
             token_iter: tokenize(file)?.into_iter().peekable(),
             file,
+            arena: BlueprintArena::new(),
         })
+    }
+
+    pub fn get_arena(&self) -> BlueprintArena {
+        self.arena.clone()
     }
 }
 
@@ -781,6 +808,7 @@ impl<'a> Iterator for ASTGenerator<'a> {
 
         let _ = self.token_iter.peek()?;
 
-        Some(parse_ast_line(&mut self.token_iter, &self.file))
+        let x = parse_ast_line(self.arena.clone(), &mut self.token_iter, &self.file);
+        Some(x)
     }
 }

@@ -45,11 +45,10 @@ use crate::libsoong::blueprint_parser::*;
 use crate::libsoong::errors::*;
 use anyhow::{Context, Result};
 
-#[derive(Debug)]
 struct DirState {
     parent: Option<Weak<RefCell<DirState>>>,
 
-    variables: HashMap<String, BlueprintValue>,
+    variables: HashMap<String, BlueprintValueRef>,
 }
 impl DirState {
     fn new(parent: Option<Weak<RefCell<DirState>>>) -> DirState {
@@ -59,9 +58,9 @@ impl DirState {
         }
     }
 
-    fn lookup_variable(&self, name: &str) -> Option<BlueprintValue> {
+    fn lookup_variable(&self, name: &str) -> Option<BlueprintValueRef> {
         if let Some(val) = self.variables.get(name) {
-            return Some((*val).clone());
+            return Some(val.clone());
         }
 
         match &self.parent {
@@ -76,31 +75,27 @@ impl DirState {
     }
 
     #[inline(always)]
-    fn insert_variable(&mut self, name: String, value: BlueprintValue) -> Option<BlueprintValue> {
+    fn insert_variable(&mut self, name: String, value: BlueprintValueRef)-> Option<BlueprintValueRef> {
         return self.variables.insert(name, value);
     }
 }
 
-#[derive(Debug)]
 pub struct EvaluationState {
     // Internal path to dir state
-    dir_states: HashMap<PathBuf, Rc<RefCell<DirState>>>,
+    dir_states: HashMap<PathBuf, Rc<RefCell<DirState<>>>>,
     // Internal path to (real path, soong file state)
     files : HashMap<PathBuf, (PathBuf, FileState)> 
 }
 
-#[derive(Debug)]
 pub struct FileState {
     parent_dir_state: Rc<RefCell<DirState>>,
-    rules: Vec<(String, HashMap<String, BlueprintValue>)>,
+    rules: Vec<(String, HashMap<String, BlueprintValueRef>)>,
 
-    // SAFTY: 
-    // This MUST be regenerated whenever you touch `rules`
-    undeclaired_identifiers : HashSet<*mut BlueprintValue>
+    undeclaired_identifiers : HashSet<BlueprintValueRef>
 }
 
 
-
+/*
 fn regenerate_for(hashset : &mut HashSet<*mut BlueprintValue>, value : &mut BlueprintValue) {
     use BlueprintValue::*;
     match value {
@@ -126,8 +121,10 @@ fn regenerate_for(hashset : &mut HashSet<*mut BlueprintValue>, value : &mut Blue
     }
 
 }
-impl FileState {
+*/
 
+/*
+impl FileState {
     pub fn regenerate_identifiers(&mut self) {
         let mut undeclaired_identifiers = HashSet::with_capacity(self.undeclaired_identifiers.capacity());
 
@@ -137,13 +134,10 @@ impl FileState {
             }
         }
         self.undeclaired_identifiers = undeclaired_identifiers;
-        
-
     }
-
-
 }
 
+*/
 
 #[inline]
 fn neg_value_eval(
@@ -255,34 +249,32 @@ fn value_evaluate(state: Rc<RefCell<DirState>>, value: BlueprintValue) -> Result
 }
 
 
-fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<FileState> {
-    let mut file_state = FileState {
-        parent_dir_state: state.clone(),
-        rules: Vec::with_capacity(64),
+fn file_evaluate(dir_state: Rc<RefCell<DirState>>, file: &str) -> Result<FileState> {
 
-        undeclaired_identifiers: HashSet::new()
-    };
-    for line in ASTGenerator::from(file)? {
+    let ast_gen = ASTGenerator::from(file)?;
+    let arena = ast_gen.get_arena();
+
+    for line in ast_gen  {
         let line = line?;
 
         match line {
             ASTLine::VarSet(ident, value) => {
-                let value = value_evaluate(state.clone(), value)?;
+                let value = value_evaluate(dir_state.clone(), value)?;
 
-                state.borrow_mut().insert_variable(ident, value);
+                dir_state.borrow_mut().insert_variable(ident, value);
             }
             ASTLine::VarAddSet(ident, value) => {
-                let original = state.borrow().lookup_variable(&ident).with_context(|| {
+                let original = dir_state.borrow().lookup_variable(&ident).with_context(|| {
                     format!("Add set failed for undefined variable: '{}'", ident)
                 })?;
 
                 // TODO: This can be refactored to remove the heap
-                let value = add_eval(state.clone(), original, value)?;
+                let value = add_eval(dir_state.clone(), original, value)?;
 
-                state.borrow_mut().insert_variable(ident, value);
+                dir_state.borrow_mut().insert_variable(ident, value);
             }
             ASTLine::Rule(ident, value) => {
-                let mut value = match map_eval(state.clone(), value)? {
+                let mut value = match map_eval(dir_state.clone(), value)? {
                     BlueprintValue::Map(map) => map,
                     _ => unreachable!(),
                 };
@@ -295,8 +287,8 @@ fn file_evaluate(state: Rc<RefCell<DirState>>, file: &str) -> Result<FileState> 
     Ok(file_state)
 }
 
-impl EvaluationState {
-    pub fn new() -> EvaluationState {
+impl<'a> EvaluationState<'a> {
+    pub fn new() -> EvaluationState<'a> {
         EvaluationState {
             dir_states: HashMap::new(),
             files : HashMap::new()
@@ -337,22 +329,22 @@ impl EvaluationState {
             )
         })?;
 
-        let state = self.get_or_create_dir_state(internel_path.parent().expect("Parent dir must exist"));
+        let dir_state = self.get_or_create_dir_state(internel_path.parent().expect("Parent dir must exist"));
 
-        let file = file_evaluate(state, &file_contents).with_context(|| {
+        let file_file = file_evaluate(dir_state, &file_contents).with_context(|| {
             format!(
                 "Parsing error during injestion: {}",
                 path.to_str().unwrap_or("")
             )
         })?;
 
-        for id in &file.undeclaired_identifiers {
+        for id in &file_file.undeclaired_identifiers {
             let x = dbg!(unsafe {&**id});
 
         }
 
 
-        self.files.insert(internel_path.to_path_buf(), (path.to_path_buf(), file));
+        self.files.insert(internel_path.to_path_buf(), (path.to_path_buf(), file_file));
 
         Ok(())
     }

@@ -37,6 +37,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "light-rc-arena"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5cadb15e748b05313761e277f784108faf334653e2fd02266c1c20735b21f3a"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -59,6 +65,7 @@ name = "rust_soong_utils"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "light-rc-arena",
  "serde",
  "strum_macros",
  "toml",
